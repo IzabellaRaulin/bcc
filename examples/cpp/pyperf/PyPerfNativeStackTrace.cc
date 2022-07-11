@@ -43,6 +43,10 @@ NativeStackTrace::NativeStackTrace(uint32_t pid, const unsigned char *raw_stack,
   my_accessors.access_fpreg = NULL;
   my_accessors.resume = NULL;
 
+  logInfo(5,"DEBUGIZA: PID=\"%d\"\n", pid);
+  std::cout << "\nDEBUGIZA PID=";
+  std::cout << pid;
+  
   int res;
   unw_addr_space_t as = unw_create_addr_space(&my_accessors, 0);
   void *upt = _UPT_create(pid);
