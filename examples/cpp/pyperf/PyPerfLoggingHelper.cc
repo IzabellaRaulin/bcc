@@ -11,7 +11,7 @@
 namespace ebpf {
 namespace pyperf {
 
-static uint64_t setVerbosityLevel = 0;
+static uint64_t setVerbosityLevel = 9;
 
 void setVerbosity(uint64_t verbosityLevel) {
   setVerbosityLevel = verbosityLevel;
