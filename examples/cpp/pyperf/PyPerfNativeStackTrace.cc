@@ -8,7 +8,6 @@
 #include <sys/uio.h>
 #include <errno.h>
 #include <unistd.h>
-
 #include <cstdio>
 #include <cstring>
 #include <sstream>
@@ -19,10 +18,18 @@ namespace ebpf {
 namespace pyperf {
 
 // Ideally it was preferable to save this as the context in libunwind accessors, but it's already used by UPT
+// static const uint32_t NativeStackTrace::CacheMaxSizeMB = 56 // Question: Prefer to limit number of entries (pid) (e.g. cache.size()) or sizeof
+// const uint8_t NativeStackTrace::CacheMaxTTL = 300 // In seconds
 const uint8_t *NativeStackTrace::stack = NULL;
 size_t NativeStackTrace::stack_len = 0;
 uintptr_t NativeStackTrace::sp = 0;
 uintptr_t NativeStackTrace::ip = 0;
+// bool NativeStackTrace::cache_on = true;
+MAP NativeStackTrace::cache;
+// using map_ref_t = std::reference_wrapper<MAP>;
+
+// bool ok = true;
+
 
 NativeStackTrace::NativeStackTrace(uint32_t pid, const unsigned char *raw_stack,
                                    size_t stack_len, uintptr_t ip, uintptr_t sp) : error_occurred(false) {
@@ -35,7 +42,8 @@ NativeStackTrace::NativeStackTrace(uint32_t pid, const unsigned char *raw_stack,
     return;
   }
 
-  unw_accessors_t my_accessors = _UPT_accessors;
+  // this->symbols.push_back(std::string("DEBUGIZA: cache_on=" + std::to_string(cache_on) + "\n"));
+  // unw_accessors_t my_accessors = _UPT_accessors;
   my_accessors.access_mem = NativeStackTrace::access_mem;
   my_accessors.access_reg = NativeStackTrace::access_reg;
 
@@ -43,30 +51,66 @@ NativeStackTrace::NativeStackTrace(uint32_t pid, const unsigned char *raw_stack,
   my_accessors.access_fpreg = NULL;
   my_accessors.resume = NULL;
 
-  logInfo(5,"DEBUGIZA: PID=\"%d\"\n", pid);
-  std::cout << "\nDEBUGIZA PID=";
-  std::cout << pid;
-  
-  int res;
-  unw_addr_space_t as = unw_create_addr_space(&my_accessors, 0);
-  void *upt = _UPT_create(pid);
-  if (!upt) {
-    this->symbols.push_back(std::string("[Error _UPT_create (system OOM)]"));
-    this->error_occurred = true;
-    goto out;
-  }
+  std::string s_debug = "DEBUGIZA: PID=" + std::to_string(pid) + "\n";
+  this->symbols.push_back(std::string(s_debug));
 
+   // check whether the PID is presented in the cache
+  unw_addr_space_t as;
   unw_cursor_t cursor;
-  // TODO: It's possible to make libunwind use cache using unw_set_caching_policy, which might lead to significent
-  //       performance improvement. We just need to make sure it's not dangerous. For now the overhead is good enough.
-  res = unw_init_remote(&cursor, as, upt);
-  if (res) {
-    std::ostringstream error;
-    error << "[Error unw_init_remote (" << unw_strerror(res) << ")]";
-    this->symbols.push_back(error.str());
-    this->error_occurred = true;
-    goto out;
+  void *upt;
+  using map_ref_t = std::reference_wrapper<MAP_ITERATOR>;
+  MAP_ITERATOR cached_value = cache_read(cache, pid);
+  int res;
+
+  if (cached_value) {
+    logInfo(2,"The given key %d is not presented in the cache", pid);
+    this->symbols.push_back(std::string("DEBUGIZA: The given pid=" + std::to_string(pid) + " is not presented in the cache\n"));
+
+  
+    as = unw_create_addr_space(&my_accessors, 0);
+
+    this->symbols.push_back(std::string("DEBUGIZA: Creating UPI...\n"));
+    upt = _UPT_create(pid);
+    if (!upt) {
+      this->symbols.push_back(std::string("[Error _UPT_create (system OOM)]"));
+      this->error_occurred = true;
+      goto out;
+    }
+    this->symbols.push_back(std::string("DEBUGIZA: Creating UPI...DONE\n"));
+
+    // TODO: It's possible to make libunwind use cache using unw_set_caching_policy, which might lead to significent
+    //       performance improvement. We just need to make sure it's not dangerous. For now the overhead is good enough.
+    // IZA: why unw_init_remote is used? Why not unw_init_local
+    
+    this->symbols.push_back(std::string("DEBUGIZA: Init Cursor...\n"));
+
+    res = unw_init_remote(&cursor, as, upt);  
+    if (res) {
+      std::ostringstream error;
+      error << "[Error unw_init_remote (" << unw_strerror(res) << ")]";
+      this->symbols.push_back(error.str());
+      this->error_occurred = true;
+      goto out;
+    }
+    this->symbols.push_back(std::string("DEBUGIZA: Init Cursor...DONE\n"));
+    // this->symbols.push_back(std::string("DEBUGIZA: cursor= " + std::to_string(cursor) + "\n"));
+    // this->symbols.push_back(std::string("DEBUGIZA: as= " + std::to_string((void *)as) + "\n"));
+    // this->symbols.push_back(std::string("DEBUGIZA: upt= " + std::to_string(upt) + "\n"));
+
+      // if (cache_size() > CacheMaxSizeMB*1024*1024 + sizeof_single_cache_entr()) {  
+      //     cache_eviction()
+      // }
+
+    // Insert to cache
+    this->symbols.push_back(std::string("DEBUGIZA: Insert to cache...\n"));
+    cache[pid] = std::make_pair(cursor, time(nullptr)); //  (cursor, as, upt, time.time());
+    //cache[pid] = (cursor, time.time(), as, upt); //  (cursor, as, upt, time.time());
+     this->symbols.push_back(std::string("DEBUGIZA: Insert to cache...DONE\n"));
+    //this->symbols.push_back(std::string("DEBUGIZA: Insert to cache["+ std::to_string(pid) + "=["std::to_string(cache[pid].first) + "," + std::to_string(cache[pid].second) + "] ...DONE\n"));
   }
+  
+  
+  cursor = cached_value.first;
 
   do {
     unw_word_t offset;
@@ -74,6 +118,7 @@ NativeStackTrace::NativeStackTrace(uint32_t pid, const unsigned char *raw_stack,
 
     // TODO: This function is very heavy. We should try to do some caching here, maybe in the
     //       underlying UPT function.
+
     res = unw_get_proc_name(&cursor, sym, sizeof(sym), &offset);
     if (res == 0) {
       this->symbols.push_back(std::string(sym));
@@ -103,6 +148,7 @@ NativeStackTrace::NativeStackTrace(uint32_t pid, const unsigned char *raw_stack,
   } while (unw_step(&cursor) > 0);
 
 out:
+  // TODO IZA - usuwanie upt i as
   if (upt) {
     _UPT_destroy(upt);
   }
@@ -194,6 +240,38 @@ std::vector<std::string> NativeStackTrace::get_stack_symbol() const {
 bool NativeStackTrace::error_occured() const {
   return error_occurred;
 }
+
+std::optional<MAP_ITERATOR> NativeStackTrace::cache_read(const MAP &map, const uint32_t &findMe) {
+    try {
+        const MAP_ITERATOR & value = map.at(findMe);
+
+        // TODO: Handle the element found.
+        return value;
+        return std::optional<MAP_ITERATOR>{value};
+    }
+    catch (const std::out_of_range&) {
+        this->symbols.push_back(std::string("Key " + std::to_string(findMe) +" not found"));
+        // TODO: Deal with the missing element.
+        logInfo(2, "No entry for PID %d in the cache\n", findMe);
+    }
+
+    return std::nullopt;
+}
+
+// uint32_t NativeStackTrace::cache_size() const {  
+//   return sizeof(cache) + cache.size()*sizeof_single_cache_entry();
+// }
+
+// uint32_t NativeStackTrace::sizeof_single_cache_entry() const {  
+//   return sizeof(decltype(cache)::key_type) + sizeof(decltype(cache)::mapped_type);
+// }
+
+// // To evict an element older than 5 minutes
+// int NativeStackTrace::cache_eviction() {
+//   LogInfo(2, "DEBUGIZA: Cache eviction - todo \n");
+//   this->symbols.push_back(std::string("DEBUGIZA: Cache eviction - todo\n"));
+//   return 0;
+// }
 
 }  // namespace pyperf
 }  // namespace ebpf

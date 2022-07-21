@@ -8,9 +8,12 @@
 
 #include <string>
 #include <vector>
+#include <map>
 
 namespace ebpf {
 namespace pyperf {
+typedef std::pair<unw_cursor_t, time_t> MAP_ITERATOR;
+typedef std::map<uint32_t, MAP_ITERATOR> MAP;
 
 class NativeStackTrace {
  public:
@@ -21,6 +24,7 @@ class NativeStackTrace {
   bool error_occured() const;
 
  private:
+
   std::vector<std::string> symbols;
   bool error_occurred;
 
@@ -28,13 +32,18 @@ class NativeStackTrace {
   static size_t stack_len;
   static uintptr_t ip;
   static uintptr_t sp;
+  static std::map<uint32_t, std::pair<unw_cursor_t, time_t>> cache;
 
   static int access_reg(unw_addr_space_t as, unw_regnum_t regnum,
                         unw_word_t *valp, int write, void *arg);
 
   static int access_mem(unw_addr_space_t as, unw_word_t addr, unw_word_t *valp,
                         int write, void *arg);
+
+  static std::optional<MAP_ITERATOR> cache_read(const MAP &map, const uint32_t &findMe);
 };
+
+
 
 }  // namespace pyperf
 }  // namespace ebpf
