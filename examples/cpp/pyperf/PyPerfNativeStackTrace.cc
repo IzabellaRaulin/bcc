@@ -42,8 +42,7 @@ NativeStackTrace::NativeStackTrace(uint32_t pid, const unsigned char *raw_stack,
     return;
   }
 
-  // this->symbols.push_back(std::string("DEBUGIZA: cache_on=" + std::to_string(cache_on) + "\n"));
-  // unw_accessors_t my_accessors = _UPT_accessors;
+  unw_accessors_t my_accessors = _UPT_accessors;
   my_accessors.access_mem = NativeStackTrace::access_mem;
   my_accessors.access_reg = NativeStackTrace::access_reg;
 
@@ -58,11 +57,11 @@ NativeStackTrace::NativeStackTrace(uint32_t pid, const unsigned char *raw_stack,
   unw_addr_space_t as;
   unw_cursor_t cursor;
   void *upt;
-  using map_ref_t = std::reference_wrapper<MAP_ITERATOR>;
-  MAP_ITERATOR cached_value = cache_read(cache, pid);
+  // using map_ref_t = std::reference_wrapper<MAP_ITERATOR>;
+  
   int res;
 
-  if (cached_value) {
+  if (is_cached(cache, pid) == false) {
     logInfo(2,"The given key %d is not presented in the cache", pid);
     this->symbols.push_back(std::string("DEBUGIZA: The given pid=" + std::to_string(pid) + " is not presented in the cache\n"));
 
@@ -84,7 +83,7 @@ NativeStackTrace::NativeStackTrace(uint32_t pid, const unsigned char *raw_stack,
     
     this->symbols.push_back(std::string("DEBUGIZA: Init Cursor...\n"));
 
-    res = unw_init_remote(&cursor, as, upt);  
+    res = unw_init_remote(&cursor, as, &upt);  
     if (res) {
       std::ostringstream error;
       error << "[Error unw_init_remote (" << unw_strerror(res) << ")]";
@@ -103,14 +102,18 @@ NativeStackTrace::NativeStackTrace(uint32_t pid, const unsigned char *raw_stack,
 
     // Insert to cache
     this->symbols.push_back(std::string("DEBUGIZA: Insert to cache...\n"));
-    cache[pid] = std::make_pair(cursor, time(nullptr)); //  (cursor, as, upt, time.time());
+    cache_put(cache, pid, cursor, as, upt);
+    // cache[pid] = std::make_pair(cursor, time(nullptr)); //  (cursor, as, upt, time.time());
     //cache[pid] = (cursor, time.time(), as, upt); //  (cursor, as, upt, time.time());
      this->symbols.push_back(std::string("DEBUGIZA: Insert to cache...DONE\n"));
     //this->symbols.push_back(std::string("DEBUGIZA: Insert to cache["+ std::to_string(pid) + "=["std::to_string(cache[pid].first) + "," + std::to_string(cache[pid].second) + "] ...DONE\n"));
+  } else {
+     Object cached_value = cache_get(cache, pid);
+     cursor = cached_value.cursor;
+     as = cached_value.as;
+     upt = cached_value.upt;
   }
   
-  
-  cursor = cached_value.first;
 
   do {
     unw_word_t offset;
@@ -241,23 +244,35 @@ bool NativeStackTrace::error_occured() const {
   return error_occurred;
 }
 
-std::optional<MAP_ITERATOR> NativeStackTrace::cache_read(const MAP &map, const uint32_t &findMe) {
-    try {
-        const MAP_ITERATOR & value = map.at(findMe);
+bool NativeStackTrace::is_cached(const MAP &map, const uint32_t &key) {
+  try {
+      map.at(key);
+      // TODO: Handle the element found.
+      return true;
+  }
+  catch (const std::out_of_range&) {
+      this->symbols.push_back(std::string("Key " + std::to_string(key) +" not found"));
+      // TODO: Deal with the missing element.
+      logInfo(2, "No entry for %d in the cache\n", key);
+  }
 
-        // TODO: Handle the element found.
-        return value;
-        return std::optional<MAP_ITERATOR>{value};
-    }
-    catch (const std::out_of_range&) {
-        this->symbols.push_back(std::string("Key " + std::to_string(findMe) +" not found"));
-        // TODO: Deal with the missing element.
-        logInfo(2, "No entry for PID %d in the cache\n", findMe);
-    }
-
-    return std::nullopt;
+  return false;
 }
 
+Object NativeStackTrace::cache_get(const MAP &map, const uint32_t &key) {
+  
+  const Object & value = map.at(key);
+
+  return value;
+
+}
+
+void NativeStackTrace::cache_put(MAP &map, const uint32_t &key, const unw_cursor_t cursor, const unw_addr_space_t as, void *upt) {
+  Object obj = {cursor, as, upt};
+
+  map[key] = obj;
+  logInfo(2, "Added entry for %d in the cache\n", key);
+}
 // uint32_t NativeStackTrace::cache_size() const {  
 //   return sizeof(cache) + cache.size()*sizeof_single_cache_entry();
 // }
