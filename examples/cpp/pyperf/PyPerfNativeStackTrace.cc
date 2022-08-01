@@ -23,6 +23,7 @@ const uint8_t *NativeStackTrace::stack = NULL;
 size_t NativeStackTrace::stack_len = 0;
 uintptr_t NativeStackTrace::sp = 0;
 uintptr_t NativeStackTrace::ip = 0;
+// std::map<uint32_t, int> NativeStackTrace::cache;
 
 NativeStackTrace::NativeStackTrace(uint32_t pid, const unsigned char *raw_stack,
                                    size_t stack_len, uintptr_t ip, uintptr_t sp) : error_occurred(false) {
@@ -44,15 +45,29 @@ NativeStackTrace::NativeStackTrace(uint32_t pid, const unsigned char *raw_stack,
   my_accessors.resume = NULL;
 
   int res;
-  unw_addr_space_t as = unw_create_addr_space(&my_accessors, 0);
-  void *upt = _UPT_create(pid);
+  unw_addr_space_t as;
+  unw_cursor_t cursor;
+  void *upt;
+
+  // auto populated = PyPerfProfiler::populatePidTable()
+  // this->symbols.push_back(std::string("\nDEBUGIZA:Populated" + std::to_string(populated) +"\n"));
+
+  // cache[pid] = 0;
+
+  // if (is_cached(pid) == false) {
+  //   logInfo(2,"The given key %d is not presented in the cache", pid);
+  // }
+
+  this->symbols.push_back(std::string("DEBUGIZA: The given pid=" + std::to_string(pid) + " is not presented in the cache\n"));
+  as = unw_create_addr_space(&my_accessors, 0);
+  upt = _UPT_create(pid);
   if (!upt) {
     this->symbols.push_back(std::string("[Error _UPT_create (system OOM)]"));
     this->error_occurred = true;
     goto out;
   }
 
-  unw_cursor_t cursor;
+
   // TODO: It's possible to make libunwind use cache using unw_set_caching_policy, which might lead to significent
   //       performance improvement. We just need to make sure it's not dangerous. For now the overhead is good enough.
   res = unw_init_remote(&cursor, as, upt);
@@ -63,6 +78,7 @@ NativeStackTrace::NativeStackTrace(uint32_t pid, const unsigned char *raw_stack,
     this->error_occurred = true;
     goto out;
   }
+
 
   do {
     unw_word_t offset;
@@ -190,6 +206,22 @@ std::vector<std::string> NativeStackTrace::get_stack_symbol() const {
 bool NativeStackTrace::error_occured() const {
   return error_occurred;
 }
+
+// bool NativeStackTrace::is_cached (uint32_t key) {
+//   this->symbols.push_back(std::string("Taki mamy klucz " + std::to_string(key)));
+//   // try {
+//   //     map.at(key);
+//   //     // TODO: Handle the element found.
+//   //     return true;
+//   // }
+//   // catch (const std::out_of_range&) {
+//   //     this->symbols.push_back(std::string("Key " + std::to_string(key) +" not found"));
+//   //     // TODO: Deal with the missing element.
+//   //     logInfo(2, "No entry for %d in the cache\n", key);
+//   // }
+
+//   return false;
+// }
 
 }  // namespace pyperf
 }  // namespace ebpf

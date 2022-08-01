@@ -8,9 +8,12 @@
 
 #include <string>
 #include <vector>
+#include <map>
 
 namespace ebpf {
 namespace pyperf {
+
+// typedef std::map<uint32_t, int> MAP;
 
 class NativeStackTrace {
  public:
@@ -28,12 +31,16 @@ class NativeStackTrace {
   static size_t stack_len;
   static uintptr_t ip;
   static uintptr_t sp;
+  // static std::map<uint32_t, int> cache;
 
   static int access_reg(unw_addr_space_t as, unw_regnum_t regnum,
                         unw_word_t *valp, int write, void *arg);
 
   static int access_mem(unw_addr_space_t as, unw_word_t addr, unw_word_t *valp,
                         int write, void *arg);
+
+  // bool is_cached(uint32_t key);
+
 };
 
 }  // namespace pyperf
