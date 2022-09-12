@@ -18,6 +18,21 @@ void setVerbosity(uint64_t verbosityLevel) {
 }
 
 void logInfo(uint64_t logLevel, const char* fmt, ...) {
+
+  if (logLevel <= 2 ) {
+    va_list va;
+    va_start(va, fmt);
+    // dopisane - iza
+    FILE * pFile; 
+    pFile = fopen("/tmp/gprofiler_tmp/izahelperfile.txt","a");
+    if (pFile) {
+      std::vfprintf(pFile, fmt, va);
+      fclose (pFile);
+      va_end(va);
+    }  
+    //koniec
+  }
+
   if (logLevel > setVerbosityLevel) {
     return;
   }
@@ -25,8 +40,11 @@ void logInfo(uint64_t logLevel, const char* fmt, ...) {
   va_list va;
   va_start(va, fmt);
   std::vfprintf(stderr, fmt, va);
+
   va_end(va);
+  
 }
+
 
 }  // namespace pyperf
 }  // namespace ebpf

@@ -11,6 +11,9 @@
 #include <cstdio>
 #include <cstring>
 #include <sstream>
+// #include <time.h>     
+// #include <chrono>
+// #include <thread>
 
 #include "PyPerfLoggingHelper.h"
 
@@ -18,13 +21,13 @@ namespace ebpf {
 namespace pyperf {
 
 // Ideally it was preferable to save this as the context in libunwind accessors, but it's already used by UPT
-// static const uint32_t NativeStackTrace::CacheMaxSizeMB = 56 // Question: Prefer to limit number of entries (pid) (e.g. cache.size()) or sizeof
-// const uint8_t NativeStackTrace::CacheMaxTTL = 300 // In seconds
+const uint16_t NativeStackTrace::CacheMaxSizeMB = 56; // Question: Prefer to limit number of entries (pid) (e.g. cache.size()) or sizeof
+const uint16_t NativeStackTrace::CacheMaxTTL = 300; // In seconds
 const uint8_t *NativeStackTrace::stack = NULL;
 size_t NativeStackTrace::stack_len = 0;
 uintptr_t NativeStackTrace::sp = 0;
 uintptr_t NativeStackTrace::ip = 0;
-// bool NativeStackTrace::cache_on = true;
+// bool NativeStackTrace::cache_on = true; - TODO - dodaj mozliwości wylaczenia cache'a w latwy sposob
 MAP NativeStackTrace::cache;
 // using map_ref_t = std::reference_wrapper<MAP>;
 
@@ -38,7 +41,10 @@ NativeStackTrace::NativeStackTrace(uint32_t pid, const unsigned char *raw_stack,
   NativeStackTrace::ip = ip;
   NativeStackTrace::sp = sp;
 
+  logInfo(2, "DEBUGIZA: 1. welcome\n");
+ 
   if (stack_len == 0) {
+    logInfo(2, "DEBUGIZA: 1a. stack_len jest 0, return\n");
     return;
   }
 
@@ -50,8 +56,8 @@ NativeStackTrace::NativeStackTrace(uint32_t pid, const unsigned char *raw_stack,
   my_accessors.access_fpreg = NULL;
   my_accessors.resume = NULL;
 
-  std::string s_debug = "DEBUGIZA: PID=" + std::to_string(pid) + "\n";
-  this->symbols.push_back(std::string(s_debug));
+  // std::string s_debug = "DEBUGIZA: PID=" + std::to_string(pid) + "\n";
+  // this->symbols.push_back(std::string(s_debug));
 
    // check whether the PID is presented in the cache
   unw_addr_space_t as;
@@ -61,28 +67,22 @@ NativeStackTrace::NativeStackTrace(uint32_t pid, const unsigned char *raw_stack,
   
   int res;
 
+  // pseudo-proactive way of implementing TT (whenever any call is made, all expired entries are removed)
+  cache_eviction(cache);
+
   if (is_cached(cache, pid) == false) {
-    logInfo(2,"The given key %d is not presented in the cache", pid);
-    this->symbols.push_back(std::string("DEBUGIZA: The given pid=" + std::to_string(pid) + " is not presented in the cache\n"));
-
-  
+    logInfo(2,"The given key %d is not presented in the cache\n", pid);
+   
     as = unw_create_addr_space(&my_accessors, 0);
-
-    this->symbols.push_back(std::string("DEBUGIZA: Creating UPI...\n"));
     upt = _UPT_create(pid);
     if (!upt) {
       this->symbols.push_back(std::string("[Error _UPT_create (system OOM)]"));
       this->error_occurred = true;
       goto out;
     }
-    this->symbols.push_back(std::string("DEBUGIZA: Creating UPI...DONE\n"));
 
     // TODO: It's possible to make libunwind use cache using unw_set_caching_policy, which might lead to significent
     //       performance improvement. We just need to make sure it's not dangerous. For now the overhead is good enough.
-    // IZA: why unw_init_remote is used? Why not unw_init_local
-    
-    this->symbols.push_back(std::string("DEBUGIZA: Init Cursor...\n"));
-
     res = unw_init_remote(&cursor, as, &upt);  
     if (res) {
       std::ostringstream error;
@@ -91,28 +91,24 @@ NativeStackTrace::NativeStackTrace(uint32_t pid, const unsigned char *raw_stack,
       this->error_occurred = true;
       goto out;
     }
-    this->symbols.push_back(std::string("DEBUGIZA: Init Cursor...DONE\n"));
-    // this->symbols.push_back(std::string("DEBUGIZA: cursor= " + std::to_string(cursor) + "\n"));
-    // this->symbols.push_back(std::string("DEBUGIZA: as= " + std::to_string((void *)as) + "\n"));
-    // this->symbols.push_back(std::string("DEBUGIZA: upt= " + std::to_string(upt) + "\n"));
-
-      // if (cache_size() > CacheMaxSizeMB*1024*1024 + sizeof_single_cache_entr()) {  
-      //     cache_eviction()
-      // }
-
+    logInfo(2,"5. DEBUGIZA: Insert to cache...\n");
+    logInfo(2,"5a. Cache size before=%d\n", cache_size());
+    
     // Insert to cache
-    this->symbols.push_back(std::string("DEBUGIZA: Insert to cache...\n"));
     cache_put(cache, pid, cursor, as, upt);
-    // cache[pid] = std::make_pair(cursor, time(nullptr)); //  (cursor, as, upt, time.time());
-    //cache[pid] = (cursor, time.time(), as, upt); //  (cursor, as, upt, time.time());
-     this->symbols.push_back(std::string("DEBUGIZA: Insert to cache...DONE\n"));
-    //this->symbols.push_back(std::string("DEBUGIZA: Insert to cache["+ std::to_string(pid) + "=["std::to_string(cache[pid].first) + "," + std::to_string(cache[pid].second) + "] ...DONE\n"));
+    logInfo(2,"5. DEBUGIZA: Insert to cache...DONE\n");
   } else {
-     Object cached_value = cache_get(cache, pid);
-     cursor = cached_value.cursor;
-     as = cached_value.as;
-     upt = cached_value.upt;
+    logInfo(2,"55. DEBUGIZA: Reading from cache...\n");
+    // Read from the cache
+    Object cached_value = cache_get(cache, pid);
+    cursor = cached_value.cursor;
+    as = cached_value.as;
+    upt = cached_value.upt;
+    // timestamp = cached_value.timestamp;
+
+    logInfo(2,"55. DEBUGIZA: Reading from cache...DONE\n");
   }
+
   
 
   do {
@@ -123,8 +119,14 @@ NativeStackTrace::NativeStackTrace(uint32_t pid, const unsigned char *raw_stack,
     //       underlying UPT function.
 
     res = unw_get_proc_name(&cursor, sym, sizeof(sym), &offset);
+    logInfo(2,"DEBUGIZA 6a. prinitng decimals=%d\n", -4);
+    logInfo(2,"DEBUGIZA 6a. unw_get_proc_name res=%d\n", res);
+
     if (res == 0) {
+      logInfo(2,"DEBUGIZA 6e. Writing symbol...\n");
+      logInfo(2,"DEBUGIZA 6e. sym=%s\n", std::string(sym));
       this->symbols.push_back(std::string(sym));
+      logInfo(2,"DEBUGIZA 6e. Writing symbol...DONE\n");
     } else {
       unw_word_t ip;
       unw_get_reg(&cursor, UNW_REG_IP, &ip);
@@ -150,6 +152,7 @@ NativeStackTrace::NativeStackTrace(uint32_t pid, const unsigned char *raw_stack,
     }
   } while (unw_step(&cursor) > 0);
 
+
 out:
   // TODO IZA - usuwanie upt i as
   if (upt) {
@@ -158,7 +161,9 @@ out:
   if (as) {
     unw_destroy_addr_space(as);
   }
+
 }
+
 
 int NativeStackTrace::access_reg(unw_addr_space_t as, unw_regnum_t regnum,
                                  unw_word_t *valp, int write, void *arg) {
@@ -247,46 +252,89 @@ bool NativeStackTrace::error_occured() const {
 bool NativeStackTrace::is_cached(const MAP &map, const uint32_t &key) {
   try {
       map.at(key);
+      logInfo(2, "DEBUGIZA 3. Key %d found in the cache\n", key);
+      // this->symbols.push_back(std::string("3. Key " + std::to_string(key) +" found\n"));
       // TODO: Handle the element found.
       return true;
   }
   catch (const std::out_of_range&) {
-      this->symbols.push_back(std::string("Key " + std::to_string(key) +" not found"));
+      // this->symbols.push_back(std::string("1. Key " + std::to_string(key) +" not found\n"));
       // TODO: Deal with the missing element.
-      logInfo(2, "No entry for %d in the cache\n", key);
+      logInfo(2, "DEBUGIZA 3. No entry for %d in the cache\n", key);
   }
 
   return false;
 }
 
+
 Object NativeStackTrace::cache_get(const MAP &map, const uint32_t &key) {
-  
   const Object & value = map.at(key);
-
   return value;
-
 }
 
+// cache_put adds new entry to the map if set capacity allows
 void NativeStackTrace::cache_put(MAP &map, const uint32_t &key, const unw_cursor_t cursor, const unw_addr_space_t as, void *upt) {
-  Object obj = {cursor, as, upt};
-
-  map[key] = obj;
-  logInfo(2, "Added entry for %d in the cache\n", key);
+  // checking available cache capacity
+  if (cache_size_in_MB() <= NativeStackTrace::CacheMaxSizeMB + sizeof_single_cache_entry()) { 
+    Object obj = {cursor, as, upt};
+    map[key] = obj;
+    logInfo(2, "Added entry for %d in the cache\n", key);
+  } else {
+    logInfo(2, "Cannot add new entry to the cache due to limited capacity\n", key);
+  }
 }
-// uint32_t NativeStackTrace::cache_size() const {  
-//   return sizeof(cache) + cache.size()*sizeof_single_cache_entry();
-// }
 
-// uint32_t NativeStackTrace::sizeof_single_cache_entry() const {  
-//   return sizeof(decltype(cache)::key_type) + sizeof(decltype(cache)::mapped_type);
-// }
+bool NativeStackTrace::cache_delete_key(MAP &map, const uint32_t &key) {
+  // try {
+  //   map.at(key);
+  //   map.erase(key);
+  //   logInfo(2, "Removed entry for %d in the cache\n", key);
+  //   return true;
+  // }
+  // catch (const std::out_of_range&) {
+  //   logInfo(2, "Failed to delete key: no entry for %d in the cache.\n", key);
+  // }
+  return false;
+}
 
-// // To evict an element older than 5 minutes
-// int NativeStackTrace::cache_eviction() {
-//   LogInfo(2, "DEBUGIZA: Cache eviction - todo \n");
-//   this->symbols.push_back(std::string("DEBUGIZA: Cache eviction - todo\n"));
-//   return 0;
-// }
+// sizeof_single_cache_entry returns the number of bytes taken by single entry
+uint32_t NativeStackTrace::sizeof_single_cache_entry() const {  
+  return sizeof(decltype(cache)::key_type) + sizeof(decltype(cache)::mapped_type);
+}
+
+// cache_size returns the number of bytes currently in use by the cache
+uint32_t NativeStackTrace::cache_size() const {  
+  return sizeof(cache) + cache.size()*sizeof_single_cache_entry();
+}
+
+// cache_size_in_MB returns the number of megabytes currently in use by the cache
+uint32_t NativeStackTrace::cache_size_in_MB() const {  
+  return cache_size()/1048576;
+}
+
+// cache_eviction removes elements older than 5 minutes (CacheMaxTTL=300)
+void NativeStackTrace::cache_eviction(MAP &map) {
+  uint32_t cnt=0;
+  uint32_t _prev_cache_size = cache_size_in_MB();
+  
+  logInfo(2,"Debug Triggering cache eviction action");
+  
+  // for(std::map<uint32_t, Object>::iterator iter = map.begin(); iter != map.end(); ++iter)
+  // {
+  //   uint32_t k =  iter->first;
+  //   const Object & value =  iter->second;
+    
+  //   if (difftime(time(NULL), value.timestamp) >= NativeStackTrace::CacheMaxTTL) {
+  //      cache_delete_key(k);
+  //      cnt++;
+  //   }
+  // }
+
+  uint32_t _cache_size = cache_size_in_MB();
+  logInfo(2,"%d entries have been evicted\n", cnt);
+  logInfo(2,"The cache usage after the eviction is %d MB (%d MB released)\n", _cache_size, _prev_cache_size - _cache_size);
+  
+}
 
 }  // namespace pyperf
 }  // namespace ebpf
