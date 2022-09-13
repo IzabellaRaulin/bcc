@@ -11,9 +11,9 @@
 #include <cstdio>
 #include <cstring>
 #include <sstream>
-// #include <time.h>     
-// #include <chrono>
-// #include <thread>
+#include <time.h>     
+#include <chrono>
+#include <thread>
 
 #include "PyPerfLoggingHelper.h"
 
@@ -21,18 +21,13 @@ namespace ebpf {
 namespace pyperf {
 
 // Ideally it was preferable to save this as the context in libunwind accessors, but it's already used by UPT
-const uint16_t NativeStackTrace::CacheMaxSizeMB = 56; // Question: Prefer to limit number of entries (pid) (e.g. cache.size()) or sizeof
+const uint16_t NativeStackTrace::CacheMaxSizeMB = 56;
 const uint16_t NativeStackTrace::CacheMaxTTL = 300; // In seconds
 const uint8_t *NativeStackTrace::stack = NULL;
 size_t NativeStackTrace::stack_len = 0;
 uintptr_t NativeStackTrace::sp = 0;
 uintptr_t NativeStackTrace::ip = 0;
-// bool NativeStackTrace::cache_on = true; - TODO - dodaj mozliwości wylaczenia cache'a w latwy sposob
 MAP NativeStackTrace::cache;
-// using map_ref_t = std::reference_wrapper<MAP>;
-
-// bool ok = true;
-
 
 NativeStackTrace::NativeStackTrace(uint32_t pid, const unsigned char *raw_stack,
                                    size_t stack_len, uintptr_t ip, uintptr_t sp) : error_occurred(false) {
@@ -41,10 +36,8 @@ NativeStackTrace::NativeStackTrace(uint32_t pid, const unsigned char *raw_stack,
   NativeStackTrace::ip = ip;
   NativeStackTrace::sp = sp;
 
-  logInfo(2, "DEBUGIZA: 1. welcome\n");
  
   if (stack_len == 0) {
-    logInfo(2, "DEBUGIZA: 1a. stack_len jest 0, return\n");
     return;
   }
 
@@ -55,21 +48,15 @@ NativeStackTrace::NativeStackTrace(uint32_t pid, const unsigned char *raw_stack,
   // The UPT implementation of these functions uses ptrace. We want to make sure they aren't getting called
   my_accessors.access_fpreg = NULL;
   my_accessors.resume = NULL;
-
-  // std::string s_debug = "DEBUGIZA: PID=" + std::to_string(pid) + "\n";
-  // this->symbols.push_back(std::string(s_debug));
-
-   // check whether the PID is presented in the cache
   unw_addr_space_t as;
   unw_cursor_t cursor;
   void *upt;
-  // using map_ref_t = std::reference_wrapper<MAP_ITERATOR>;
-  
   int res;
 
-  // pseudo-proactive way of implementing TT (whenever any call is made, all expired entries are removed)
+  // Pseudo-proactive way of implementing TTL - whenever any call is made, all expired entries are removed
   cache_eviction(cache);
 
+  // Check whether the entry for the process ID is presented in the cache
   if (is_cached(cache, pid) == false) {
     logInfo(2,"The given key %d is not presented in the cache\n", pid);
    
@@ -78,38 +65,32 @@ NativeStackTrace::NativeStackTrace(uint32_t pid, const unsigned char *raw_stack,
     if (!upt) {
       this->symbols.push_back(std::string("[Error _UPT_create (system OOM)]"));
       this->error_occurred = true;
-      goto out;
+      cleanup(upt, as); 
+      return;
     }
 
-    // TODO: It's possible to make libunwind use cache using unw_set_caching_policy, which might lead to significent
-    //       performance improvement. We just need to make sure it's not dangerous. For now the overhead is good enough.
     res = unw_init_remote(&cursor, as, &upt);  
     if (res) {
       std::ostringstream error;
       error << "[Error unw_init_remote (" << unw_strerror(res) << ")]";
       this->symbols.push_back(error.str());
       this->error_occurred = true;
-      goto out;
+      cleanup(upt, as); 
+      return;
     }
-    logInfo(2,"5. DEBUGIZA: Insert to cache...\n");
-    logInfo(2,"5a. Cache size before=%d\n", cache_size());
     
-    // Insert to cache
+    // Put to the cache
     cache_put(cache, pid, cursor, as, upt);
-    logInfo(2,"5. DEBUGIZA: Insert to cache...DONE\n");
+
   } else {
-    logInfo(2,"55. DEBUGIZA: Reading from cache...\n");
-    // Read from the cache
+    logInfo(2,"Found entry for the given key %d in the cache\n", pid);
+    // Get from the cache
     Object cached_value = cache_get(cache, pid);
     cursor = cached_value.cursor;
     as = cached_value.as;
     upt = cached_value.upt;
-    // timestamp = cached_value.timestamp;
-
-    logInfo(2,"55. DEBUGIZA: Reading from cache...DONE\n");
   }
 
-  
 
   do {
     unw_word_t offset;
@@ -119,14 +100,8 @@ NativeStackTrace::NativeStackTrace(uint32_t pid, const unsigned char *raw_stack,
     //       underlying UPT function.
 
     res = unw_get_proc_name(&cursor, sym, sizeof(sym), &offset);
-    logInfo(2,"DEBUGIZA 6a. prinitng decimals=%d\n", -4);
-    logInfo(2,"DEBUGIZA 6a. unw_get_proc_name res=%d\n", res);
-
     if (res == 0) {
-      logInfo(2,"DEBUGIZA 6e. Writing symbol...\n");
-      logInfo(2,"DEBUGIZA 6e. sym=%s\n", std::string(sym));
       this->symbols.push_back(std::string(sym));
-      logInfo(2,"DEBUGIZA 6e. Writing symbol...DONE\n");
     } else {
       unw_word_t ip;
       unw_get_reg(&cursor, UNW_REG_IP, &ip);
@@ -152,18 +127,16 @@ NativeStackTrace::NativeStackTrace(uint32_t pid, const unsigned char *raw_stack,
     }
   } while (unw_step(&cursor) > 0);
 
+}
 
-out:
-  // TODO IZA - usuwanie upt i as
+void NativeStackTrace::cleanup(void *upt, unw_addr_space_t as) {
   if (upt) {
     _UPT_destroy(upt);
   }
   if (as) {
     unw_destroy_addr_space(as);
   }
-
 }
-
 
 int NativeStackTrace::access_reg(unw_addr_space_t as, unw_regnum_t regnum,
                                  unw_word_t *valp, int write, void *arg) {
@@ -252,88 +225,90 @@ bool NativeStackTrace::error_occured() const {
 bool NativeStackTrace::is_cached(const MAP &map, const uint32_t &key) {
   try {
       map.at(key);
-      logInfo(2, "DEBUGIZA 3. Key %d found in the cache\n", key);
-      // this->symbols.push_back(std::string("3. Key " + std::to_string(key) +" found\n"));
-      // TODO: Handle the element found.
       return true;
   }
   catch (const std::out_of_range&) {
-      // this->symbols.push_back(std::string("1. Key " + std::to_string(key) +" not found\n"));
-      // TODO: Deal with the missing element.
-      logInfo(2, "DEBUGIZA 3. No entry for %d in the cache\n", key);
+      logInfo(2, "No entry for %d in the cache\n", key);
   }
-
   return false;
 }
-
 
 Object NativeStackTrace::cache_get(const MAP &map, const uint32_t &key) {
   const Object & value = map.at(key);
   return value;
 }
 
-// cache_put adds new entry to the map if set capacity allows
+// cache_put adds new entry to the map if the capacity allows
 void NativeStackTrace::cache_put(MAP &map, const uint32_t &key, const unw_cursor_t cursor, const unw_addr_space_t as, void *upt) {
-  // checking available cache capacity
-  if (cache_size_in_MB() <= NativeStackTrace::CacheMaxSizeMB + sizeof_single_cache_entry()) { 
-    Object obj = {cursor, as, upt};
-    map[key] = obj;
-    logInfo(2, "Added entry for %d in the cache\n", key);
-  } else {
-    logInfo(2, "Cannot add new entry to the cache due to limited capacity\n", key);
+  
+  // Check available capacity
+  if (cache_size() > NativeStackTrace::CacheMaxSizeMB*1024*1024 - cache_single_entry_size()) { 
+    logInfo(2, "The cache usage is %.2f MB, close to reaching the max memory usage (%d MB)\n", cache_size_KB()/1024, NativeStackTrace::CacheMaxSizeMB);
+    logInfo(2, "Skipping adding an entry for %d to the cache\n", key);
+     
+    return;
   }
+
+  Object obj = {cursor, as, upt, time(NULL)};
+  map[key] = obj;
+  logInfo(2, "New entry for %d was added to the cache\n", key);
 }
 
 bool NativeStackTrace::cache_delete_key(MAP &map, const uint32_t &key) {
-  // try {
-  //   map.at(key);
-  //   map.erase(key);
-  //   logInfo(2, "Removed entry for %d in the cache\n", key);
-  //   return true;
-  // }
-  // catch (const std::out_of_range&) {
-  //   logInfo(2, "Failed to delete key: no entry for %d in the cache.\n", key);
-  // }
+  try {
+    Object v = cache_get(map, key);    
+    map.erase(key);
+    cleanup(v.upt, v.as);
+    logInfo(2, "The entry for %d was deleted from the cache\n", key);
+    return true;
+  }
+  catch (const std::out_of_range&) {
+    logInfo(2, "Failed to delete entry for %d: no such key in the cache\n", key);
+  }
   return false;
 }
 
-// sizeof_single_cache_entry returns the number of bytes taken by single entry
-uint32_t NativeStackTrace::sizeof_single_cache_entry() const {  
+// cache_single_entry_size returns the number of bytes taken by single entry
+uint32_t NativeStackTrace::cache_single_entry_size() const {  
   return sizeof(decltype(cache)::key_type) + sizeof(decltype(cache)::mapped_type);
 }
 
 // cache_size returns the number of bytes currently in use by the cache
 uint32_t NativeStackTrace::cache_size() const {  
-  return sizeof(cache) + cache.size()*sizeof_single_cache_entry();
+  return sizeof(cache) + cache.size()*cache_single_entry_size();
 }
 
-// cache_size_in_MB returns the number of megabytes currently in use by the cache
-uint32_t NativeStackTrace::cache_size_in_MB() const {  
-  return cache_size()/1048576;
+// cache_size_KB returns the number of kilobytes currently in use by the cache
+float NativeStackTrace::cache_size_KB() const {  
+  return cache_size()/1024;
 }
+
 
 // cache_eviction removes elements older than 5 minutes (CacheMaxTTL=300)
 void NativeStackTrace::cache_eviction(MAP &map) {
-  uint32_t cnt=0;
-  uint32_t _prev_cache_size = cache_size_in_MB();
-  
-  logInfo(2,"Debug Triggering cache eviction action");
-  
-  // for(std::map<uint32_t, Object>::iterator iter = map.begin(); iter != map.end(); ++iter)
-  // {
-  //   uint32_t k =  iter->first;
-  //   const Object & value =  iter->second;
-    
-  //   if (difftime(time(NULL), value.timestamp) >= NativeStackTrace::CacheMaxTTL) {
-  //      cache_delete_key(k);
-  //      cnt++;
-  //   }
-  // }
+  std::vector<uint32_t> keys_to_delete;
+  float _prev_cache_size = cache_size_KB();
 
-  uint32_t _cache_size = cache_size_in_MB();
-  logInfo(2,"%d entries have been evicted\n", cnt);
-  logInfo(2,"The cache usage after the eviction is %d MB (%d MB released)\n", _cache_size, _prev_cache_size - _cache_size);
-  
+  for(std::map<uint32_t, Object>::iterator iter = map.begin(); iter != map.end(); ++iter)
+  {
+    uint32_t k =  iter->first;
+    const Object & v =  iter->second;
+    if (std::abs(difftime(v.timestamp, time(NULL))) > NativeStackTrace::CacheMaxTTL) {
+      // exceeding TTL
+      keys_to_delete.push_back(k);
+    }
+  }
+
+  // Delete expired entries
+  for( size_t i = 0; i < keys_to_delete.size(); i++ ) {
+      cache_delete_key(map, keys_to_delete[i]);
+  }
+
+  if (keys_to_delete.size() > 0) {
+    float _cache_size = cache_size_KB();
+    logInfo(2,"Evicted %d item(s) from the cache\n", keys_to_delete.size());
+    logInfo(2,"The cache usage after eviction action is %.2f KB (released %.2f KB)\n", _cache_size, _prev_cache_size - _cache_size);    
+  }
 }
 
 }  // namespace pyperf
