@@ -60,7 +60,7 @@ NativeStackTrace::NativeStackTrace(uint32_t pid, const unsigned char *raw_stack,
 
   // Check whether the entry for the process ID is presented in the cache
   if (!is_cached(cache, pid)) {
-    logInfo(2,"The given key %d is not presented in the cache\n", pid);
+    logInfo(3,"The given key %d is not presented in the cache\n", pid);
    
     as = unw_create_addr_space(&my_accessors, 0);
     upt = _UPT_create(pid);
@@ -85,7 +85,7 @@ NativeStackTrace::NativeStackTrace(uint32_t pid, const unsigned char *raw_stack,
     cache_put(cache, pid, cursor, as, upt);
 
   } else {
-    logInfo(2,"Found entry for the given key %d in the cache\n", pid);
+    logInfo(3,"Found entry for the given key %d in the cache\n", pid);
     // Get from the cache
     UnwindCacheEntry cached_entry = cache_get(cache, pid);
     cursor = cached_entry.cursor;
@@ -236,7 +236,7 @@ bool NativeStackTrace::is_cached(const UnwindCache &map, const uint32_t &key) {
       return true;
   }
   catch (const std::out_of_range&) {
-      logInfo(2, "No entry for %d in the cache\n", key);
+      logInfo(3, "No entry for %d in the cache\n", key);
   }
   return false;
 }
@@ -250,14 +250,14 @@ UnwindCacheEntry NativeStackTrace::cache_get(const UnwindCache &map, const uint3
 void NativeStackTrace::cache_put(UnwindCache &mp, const uint32_t &key, const unw_cursor_t cursor, const unw_addr_space_t as, void *upt) {  
   // Check available capacity
   if (cache_size() > NativeStackTrace::CacheMaxSizeMB*1024*1024 - cache_single_entry_size()) { 
-    logInfo(2, "The cache usage is %.2f MB, close to reaching the max memory usage (%d MB)\n", cache_size_KB()/1024, NativeStackTrace::CacheMaxSizeMB);
-    logInfo(2, "Skipping adding an entry for %d to the cache\n", key);     
+    logInfo(3, "The cache usage is %.2f MB, close to reaching the max memory usage (%d MB)\n", cache_size_KB()/1024, NativeStackTrace::CacheMaxSizeMB);
+    logInfo(3, "Skipping adding an entry for %d to the cache\n", key);     
     return;
   }
 
   UnwindCacheEntry entry = {cursor, as, upt, now};
   mp[key] = entry;
-  logInfo(2, "New entry for %d was added to the cache\n", key);
+  logInfo(3, "New entry for %d was added to the cache\n", key);
 }
 
 // cache_delete_key removes the element from the cache and destroys unwind address space and UPT
@@ -268,13 +268,13 @@ bool NativeStackTrace::cache_delete_key(UnwindCache &mp, const uint32_t &key) {
     e = cache_get(mp, key);
   }
   catch (const std::out_of_range&) {
-    logInfo(2, "Failed to delete entry for %d: no such key in the cache\n", key);
+    logInfo(3, "Failed to delete entry for %d: no such key in the cache\n", key);
     return false;
   }
 
   mp.erase(key);
   cleanup(e.upt, e.as);
-  logInfo(2, "The entry for %d was deleted from the cache\n", key);
+  logInfo(3, "The entry for %d was deleted from the cache\n", key);
   return true;
 }
 
@@ -315,8 +315,8 @@ void NativeStackTrace::cache_eviction(UnwindCache &mp) {
 
   if (keys_to_delete.size() > 0) {
     float _cache_size = cache_size_KB();
-    logInfo(2,"Evicted %d item(s) from the cache\n", keys_to_delete.size());
-    logInfo(2,"The cache usage after eviction action is %.2f KB (released %.2f KB)\n", _cache_size, _prev_cache_size - _cache_size);    
+    logInfo(3,"Evicted %d item(s) from the cache\n", keys_to_delete.size());
+    logInfo(3,"The cache usage after eviction action is %.2f KB (released %.2f KB)\n", _cache_size, _prev_cache_size - _cache_size);    
   }
 }
 
