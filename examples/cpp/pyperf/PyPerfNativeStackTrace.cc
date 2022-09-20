@@ -27,7 +27,7 @@ const uint8_t *NativeStackTrace::stack = NULL;
 size_t NativeStackTrace::stack_len = 0;
 uintptr_t NativeStackTrace::sp = 0;
 uintptr_t NativeStackTrace::ip = 0;
-time_t  NativeStackTrace::now;
+time_t NativeStackTrace::now;
 UnwindCache NativeStackTrace::cache;
 
 
