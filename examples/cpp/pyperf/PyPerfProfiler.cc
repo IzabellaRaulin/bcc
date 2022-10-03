@@ -27,9 +27,9 @@
 #include <thread>
 
 #include "PyPerfLoggingHelper.h"
-#include "PyPerfVersion.h"
-#include "PyPerfProc.h"
 #include "PyPerfNativeStackTrace.h"
+#include "PyPerfProc.h"
+#include "PyPerfVersion.h"
 #include "bcc_elf.h"
 #include "bcc_proc.h"
 #include "bcc_syms.h"

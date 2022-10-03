@@ -5,15 +5,15 @@
 
 #include "PyPerfNativeStackTrace.h"
 
-#include <sys/uio.h>
-#include <errno.h>
-#include <unistd.h>
 #include <cxxabi.h>
+#include <errno.h>
+#include <sys/uio.h>
+#include <time.h>
+#include <unistd.h>
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <sstream>
-#include <time.h>     
-#include <chrono>
 #include <thread>
 
 #include "PyPerfLoggingHelper.h"
@@ -30,8 +30,6 @@ uintptr_t NativeStackTrace::sp = 0;
 uintptr_t NativeStackTrace::ip = 0;
 time_t NativeStackTrace::now;
 UnwindCache NativeStackTrace::cache;
-
-
 
 NativeStackTrace::NativeStackTrace(uint32_t pid, const unsigned char *raw_stack,
                                    size_t stack_len, uintptr_t ip, uintptr_t sp) : error_occurred(false) {
@@ -238,26 +236,29 @@ bool NativeStackTrace::error_occured() const {
 
 bool NativeStackTrace::is_cached(const uint32_t &key) {
   try {
-      cache.at(key);
-      return true;
+    cache.at(key);
+    return true;
   }
   catch (const std::out_of_range&) {
-      logInfo(3, "is_cached: no entry for pid %d\n", key);
+    logInfo(3, "is_cached: no entry for pid %d\n", key);
   }
   return false;
 }
 
 UnwindCacheEntry NativeStackTrace::cache_get(const uint32_t &key) {
-  const UnwindCacheEntry & entry = cache.at(key);
+  const UnwindCacheEntry &entry = cache.at(key);
   return entry;
 }
 
 // cache_put adds a new entry to the unwind cache if its capacity allows
-void NativeStackTrace::cache_put(const uint32_t &key, const unw_cursor_t cursor, const unw_addr_space_t as, void *upt) {  
+void NativeStackTrace::cache_put(const uint32_t &key, const unw_cursor_t cursor,
+                                 const unw_addr_space_t as, void *upt) {
   // Check available capacity
-  if (cache_size() > NativeStackTrace::CacheMaxSizeMB*1024*1024 - cache_single_entry_size()) { 
-    logInfo(2, "Skipping caching entry for pid %d due to the current cache usage equals to %.2f MB is close to the limit (%d MB)\n", 
-              key, cache_size_KB()/1024, NativeStackTrace::CacheMaxSizeMB);     
+  if (cache_size() > NativeStackTrace::CacheMaxSizeMB*1024*1024 - cache_single_entry_size()) {
+    logInfo(2,
+            "Skipping caching entry for pid %d due to the current cache usage "
+            "equals to %.2f MB is close to the limit (%d MB)\n",
+            key, cache_size_KB() / 1024, NativeStackTrace::CacheMaxSizeMB);
     return;
   }
 
@@ -285,27 +286,25 @@ bool NativeStackTrace::cache_delete_key(const uint32_t &key) {
 }
 
 // cache_single_entry_size returns the number of bytes taken by single entry
-uint32_t NativeStackTrace::cache_single_entry_size() {  
+uint32_t NativeStackTrace::cache_single_entry_size() {
   return sizeof(decltype(cache)::key_type) + sizeof(decltype(cache)::mapped_type);
 }
 
 // cache_size returns the number of bytes currently in use by the cache
-uint32_t NativeStackTrace::cache_size() {  
+uint32_t NativeStackTrace::cache_size() {
   return sizeof(cache) + cache.size()*cache_single_entry_size();
 }
 
 // cache_size_KB returns the number of kilobytes currently in use by the cache
-float NativeStackTrace::cache_size_KB() {  
-  return cache_size()/1024;
-}
+float NativeStackTrace::cache_size_KB() { return cache_size() / 1024; }
 
 // cache_eviction removes elements older than 5 minutes (CacheMaxTTL=300)
 void NativeStackTrace::cache_eviction() {
   std::vector<uint32_t> keys_to_delete;
   float _prev_cache_size = cache_size_KB();
 
-  for(std::map<uint32_t, UnwindCacheEntry>::iterator iter = cache.begin(); iter != cache.end(); ++iter)
-  {
+  for (std::map<uint32_t, UnwindCacheEntry>::iterator iter = cache.begin();
+       iter != cache.end(); ++iter) {
     uint32_t k =  iter->first;
     const UnwindCacheEntry & e =  iter->second;
     if (std::abs(difftime(e.timestamp, NativeStackTrace::now)) > NativeStackTrace::CacheMaxTTL) {
@@ -316,7 +315,7 @@ void NativeStackTrace::cache_eviction() {
 
   // Delete expired entries
   for( size_t i = 0; i < keys_to_delete.size(); i++ ) {
-      cache_delete_key(keys_to_delete[i]);
+    cache_delete_key(keys_to_delete[i]);
   }
 
   if (keys_to_delete.size() > 0) {

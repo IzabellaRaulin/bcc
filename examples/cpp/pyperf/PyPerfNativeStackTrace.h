@@ -22,7 +22,6 @@ typedef struct {
 
 typedef std::map<uint32_t, UnwindCacheEntry> UnwindCache;
 
-
 class NativeStackTrace {
  public:
   explicit NativeStackTrace(uint32_t pid, const uint8_t *raw_stack,
@@ -45,10 +44,10 @@ class NativeStackTrace {
   static const uint16_t CacheMaxSizeMB;
   static const uint16_t CacheMaxTTL;
 
-  static uint32_t cache_size(); 
+  static uint32_t cache_size();
   static uint32_t cache_single_entry_size();
-  static float cache_size_KB(); 
-    
+  static float cache_size_KB();
+
   static int access_reg(unw_addr_space_t as, unw_regnum_t regnum,
                         unw_word_t *valp, int write, void *arg);
 
@@ -58,7 +57,8 @@ class NativeStackTrace {
   static void cleanup(void *upt, unw_addr_space_t as);
 
   bool is_cached(const uint32_t &key);
-  void cache_put(const uint32_t &key, const unw_cursor_t cursor, const unw_addr_space_t as, void *upt);
+  void cache_put(const uint32_t &key, const unw_cursor_t cursor,
+                 const unw_addr_space_t as, void *upt);
   static UnwindCacheEntry cache_get(const uint32_t &key);
   static bool cache_delete_key(const uint32_t &key);
   static void cache_eviction();
