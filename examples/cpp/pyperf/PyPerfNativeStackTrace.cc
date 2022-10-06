@@ -71,7 +71,7 @@ NativeStackTrace::NativeStackTrace(uint32_t pid, const unsigned char *raw_stack,
       return;
     }
 
-    res = unw_init_remote(&cursor, as, &upt);  
+    res = unw_init_remote(&cursor, as, upt);
     if (res) {
       std::ostringstream error;
       error << "[Error unw_init_remote (" << unw_strerror(res) << ")]";
