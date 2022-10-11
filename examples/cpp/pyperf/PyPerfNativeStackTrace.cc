@@ -50,9 +50,8 @@ NativeStackTrace::NativeStackTrace(uint32_t pid, const unsigned char *raw_stack,
   // The UPT implementation of these functions uses ptrace. We want to make sure they aren't getting called
   my_accessors.access_fpreg = NULL;
   my_accessors.resume = NULL;
-  unw_addr_space_t as;
+
   unw_cursor_t cursor;
-  void *upt;
   int res;
 
   // Pseudo-proactive way of implementing TTL - whenever any call is made, all expired entries are removed
@@ -61,7 +60,8 @@ NativeStackTrace::NativeStackTrace(uint32_t pid, const unsigned char *raw_stack,
   // Check whether the entry for the process ID is presented in the cache
   if (!is_cached(pid)) {
     logInfo(3,"The given key %d is not presented in the cache\n", pid);
-   
+    unw_addr_space_t as;
+    void *upt;
     as = unw_create_addr_space(&my_accessors, 0);
     upt = _UPT_create(pid);
     if (!upt) {
@@ -86,11 +86,8 @@ NativeStackTrace::NativeStackTrace(uint32_t pid, const unsigned char *raw_stack,
 
   } else {
     logInfo(3,"Found entry for the given key %d in the cache\n", pid);
-    // Get from the cache
-    UnwindCacheEntry cached_entry = cache_get(pid);
-    cursor = cached_entry.cursor;
-    as = cached_entry.as;
-    upt = cached_entry.upt;
+    // Get cursor from the cache
+    cursor = cache_get(pid).cursor;
   }
 
   do {
@@ -246,7 +243,7 @@ bool NativeStackTrace::is_cached(const uint32_t &key) {
 }
 
 UnwindCacheEntry NativeStackTrace::cache_get(const uint32_t &key) {
-  const UnwindCacheEntry &entry = cache.at(key);
+  UnwindCacheEntry entry = cache.at(key);
   return entry;
 }
 
