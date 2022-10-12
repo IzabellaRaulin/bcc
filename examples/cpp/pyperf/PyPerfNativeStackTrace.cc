@@ -50,9 +50,9 @@ NativeStackTrace::NativeStackTrace(uint32_t pid, const unsigned char *raw_stack,
   // The UPT implementation of these functions uses ptrace. We want to make sure they aren't getting called
   my_accessors.access_fpreg = NULL;
   my_accessors.resume = NULL;
-
   unw_cursor_t cursor;
   int res;
+  std::ostringstream error;
 
   // Pseudo-proactive way of implementing TTL - whenever any call is made, all expired entries are removed
   cache_eviction();
@@ -63,6 +63,15 @@ NativeStackTrace::NativeStackTrace(uint32_t pid, const unsigned char *raw_stack,
     unw_addr_space_t as;
     void *upt;
     as = unw_create_addr_space(&my_accessors, 0);
+    res = unw_set_caching_policy(as, UNW_CACHE_GLOBAL);
+    if (res) {
+      error << "[Error unw_set_caching_policy (" << unw_strerror(res) << ")]";
+      this->symbols.push_back(error.str());
+      this->error_occurred = true;
+      cleanup(upt, as);
+      return;
+    }
+
     upt = _UPT_create(pid);
     if (!upt) {
       this->symbols.push_back(std::string("[Error _UPT_create (system OOM)]"));
@@ -73,7 +82,6 @@ NativeStackTrace::NativeStackTrace(uint32_t pid, const unsigned char *raw_stack,
 
     res = unw_init_remote(&cursor, as, upt);
     if (res) {
-      std::ostringstream error;
       error << "[Error unw_init_remote (" << unw_strerror(res) << ")]";
       this->symbols.push_back(error.str());
       this->error_occurred = true;
@@ -243,7 +251,7 @@ bool NativeStackTrace::is_cached(const uint32_t &key) {
 }
 
 UnwindCacheEntry NativeStackTrace::cache_get(const uint32_t &key) {
-  UnwindCacheEntry entry = cache.at(key);
+  UnwindCacheEntry &entry = cache.at(key);
   return entry;
 }
 
