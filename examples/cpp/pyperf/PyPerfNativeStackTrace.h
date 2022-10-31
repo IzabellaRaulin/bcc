@@ -42,6 +42,8 @@ class NativeStackTrace {
   static uintptr_t ip;
   static uintptr_t sp;
   static time_t now;
+  static int dbg_counter;
+  static float dbg_maxSize;
 
   static const uint16_t CacheMaxSizeMB;
   static const uint16_t CacheMaxTTL;

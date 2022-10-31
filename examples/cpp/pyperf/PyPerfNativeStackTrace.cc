@@ -31,6 +31,13 @@ uintptr_t NativeStackTrace::ip = 0;
 time_t NativeStackTrace::now;
 UnwindCache NativeStackTrace::cache;
 
+// DEBUG SECTION
+bool dbg_Unlimited_Cache = true;
+float NativeStackTrace::dbg_maxSize = 0.0;
+int NativeStackTrace::dbg_counter = 0;
+int dbg_maxNumOfKeys = 0;
+// THE END OF DEBUG SECTION
+
 NativeStackTrace::NativeStackTrace(uint32_t pid, const unsigned char *raw_stack,
                                    size_t stack_len, uintptr_t ip, uintptr_t sp) : error_occurred(false) {
   NativeStackTrace::stack = raw_stack;
@@ -56,8 +63,31 @@ NativeStackTrace::NativeStackTrace(uint32_t pid, const unsigned char *raw_stack,
 
   // Pseudo-proactive way of implementing TTL - whenever any call is made, all expired entries are removed
   cache_eviction();
-  void *upt;
 
+  // DEBUG SECTION
+  float dbg_current_cache_size = cache_size_KB();
+  if (dbg_maxSize < dbg_current_cache_size) {
+    logInfo(2, "DEBUGIZA - Increase in cache usage by  %.2f KB\n",
+            dbg_current_cache_size - dbg_maxSize);
+    dbg_maxSize = dbg_current_cache_size;
+    dbg_maxNumOfKeys = cache.size();
+    dbg_counter = 0;
+  } else {
+    dbg_counter++;
+    if (dbg_counter >= 10) {
+      // after 10 times we are sure that the cache max size is stable
+      logInfo(2, "DEBUGIZA - cache usage stops growing\n");
+    }
+  }
+
+  logInfo(2, "DEBUGIZA - cache_size=%.2f KB | %d entries \n",
+          dbg_current_cache_size, cache.size());
+  logInfo(2, "DEBUGIZA - cache_max_size=%.2f KB | %d entries \n", dbg_maxSize,
+          dbg_maxNumOfKeys);
+
+  // THE END OF DEBUG-SECTION
+
+  void *upt;
   // Check whether the entry for the process ID is presented in the cache
   if (!is_cached(pid)) {
     logInfo(3,"The given key %d is not presented in the cache\n", pid);
@@ -73,7 +103,7 @@ NativeStackTrace::NativeStackTrace(uint32_t pid, const unsigned char *raw_stack,
       return;
     }
 
-    upt=_UPT_create(pid);
+    upt = _UPT_create(pid);
     if (!upt) {
       this->symbols.push_back(std::string("[Error _UPT_create (system OOM)]"));
       this->error_occurred = true;
@@ -94,19 +124,25 @@ NativeStackTrace::NativeStackTrace(uint32_t pid, const unsigned char *raw_stack,
     cache_put(pid, cursor, as, upt);
 
   } else {
-    logInfo(3,"Found entry for the given key %d in the cache\n", pid);
+    logInfo(2, "Found entry for the given key %d in the cache\n", pid);
     // Get cursor from the cache
     cursor = cache_get(pid).cursor;
     upt =cache_get(pid).upt;
   }
 
   if (cache.at(pid).unwinded) {
+    // logInfo(2, "DEBUGIZA: unwiding is already done for pid %d\n", pid);
     for (std::string proc_name : cache.at(pid).proc_names) {
+      // logInfo(2, "DEBUGIZA: read unwinded symbol=%s\n",
+      // std::string(proc_name));
       this->symbols.push_back(proc_name);
     }
 
   } else {
+    logInfo(2, "DEBUGIZA: process unwinwining for pid %d\n", pid);
+    int dbg_proc_name_counter = 0;
     do {
+      dbg_proc_name_counter++;
       unw_word_t offset;
       char sym[256];
       char   *realname;
@@ -116,6 +152,7 @@ NativeStackTrace::NativeStackTrace(uint32_t pid, const unsigned char *raw_stack,
       //       underlying UPT function.
       res = unw_get_proc_name(&cursor, sym, sizeof(sym), &offset);
       if (res == 0) {
+        logInfo(2, "DEBUGIZA offset = %lx name = %s\n", (long)offset, sym);
         realname = abi::__cxa_demangle(sym, NULL, NULL, &status);
         if (status == 0) {
           this->symbols.push_back(std::string(realname));
@@ -150,7 +187,12 @@ NativeStackTrace::NativeStackTrace(uint32_t pid, const unsigned char *raw_stack,
         break;
       }
     } while (unw_step(&cursor) > 0);
+
+    logInfo(2, "DEBUGIZA: setting unwind=true for pid %d\n", pid);
+
     cache[pid].unwinded = true;
+    logInfo(2, "DEBUGIZA: for pid=%d stored %d proc_names\n", pid,
+            dbg_proc_name_counter);
   }
 
 }
@@ -272,12 +314,17 @@ UnwindCacheEntry NativeStackTrace::cache_get(const uint32_t &key) {
 void NativeStackTrace::cache_put(const uint32_t &key, const unw_cursor_t cursor,
                                  const unw_addr_space_t as, void *upt) {
   // Check available capacity
-  if (cache_size() > NativeStackTrace::CacheMaxSizeMB*1024*1024 - cache_single_entry_size()) {
-    logInfo(2,
-            "Skipping caching entry for pid %d due to the current cache usage "
-            "equals to %.2f MB is close to the limit (%d MB)\n",
-            key, cache_size_KB() / 1024, NativeStackTrace::CacheMaxSizeMB);
-    return;
+  // For debug purpose, skip the limit
+  if (!dbg_Unlimited_Cache) {
+    if (cache_size() > NativeStackTrace::CacheMaxSizeMB * 1024 * 1024 -
+                           cache_single_entry_size()) {
+      logInfo(
+          2,
+          "Skipping caching entry for pid %d due to the current cache usage "
+          "equals to %.2f MB is close to the limit (%d MB)\n",
+          key, cache_size_KB() / 1024, NativeStackTrace::CacheMaxSizeMB);
+      return;
+    }
   }
 
   UnwindCacheEntry entry = {cursor, as, upt, now};
