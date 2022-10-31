@@ -56,12 +56,13 @@ NativeStackTrace::NativeStackTrace(uint32_t pid, const unsigned char *raw_stack,
 
   // Pseudo-proactive way of implementing TTL - whenever any call is made, all expired entries are removed
   cache_eviction();
+  void *upt;
 
   // Check whether the entry for the process ID is presented in the cache
   if (!is_cached(pid)) {
     logInfo(3,"The given key %d is not presented in the cache\n", pid);
     unw_addr_space_t as;
-    void *upt;
+
     as = unw_create_addr_space(&my_accessors, 0);
     res = unw_set_caching_policy(as, UNW_CACHE_GLOBAL);
     if (res) {
@@ -72,7 +73,7 @@ NativeStackTrace::NativeStackTrace(uint32_t pid, const unsigned char *raw_stack,
       return;
     }
 
-    upt = _UPT_create(pid);
+    upt=_UPT_create(pid);
     if (!upt) {
       this->symbols.push_back(std::string("[Error _UPT_create (system OOM)]"));
       this->error_occurred = true;
@@ -96,49 +97,61 @@ NativeStackTrace::NativeStackTrace(uint32_t pid, const unsigned char *raw_stack,
     logInfo(3,"Found entry for the given key %d in the cache\n", pid);
     // Get cursor from the cache
     cursor = cache_get(pid).cursor;
+    upt =cache_get(pid).upt;
   }
 
-  do {
-    unw_word_t offset;
-    char sym[256];
-    char   *realname;
-    int     status;
+  if (cache.at(pid).unwinded) {
+    for (std::string proc_name : cache.at(pid).proc_names) {
+      this->symbols.push_back(proc_name);
+    }
 
-    // TODO: This function is very heavy. We should try to do some caching here, maybe in the
-    //       underlying UPT function.
-    res = unw_get_proc_name(&cursor, sym, sizeof(sym), &offset);
-    if (res == 0) {
-      realname = abi::__cxa_demangle(sym, NULL, NULL, &status);
-      if (status == 0) {
-        this->symbols.push_back(std::string(realname));
+  } else {
+    do {
+      unw_word_t offset;
+      char sym[256];
+      char   *realname;
+      int     status;
+
+      // TODO: This function is very heavy. We should try to do some caching here, maybe in the
+      //       underlying UPT function.
+      res = unw_get_proc_name(&cursor, sym, sizeof(sym), &offset);
+      if (res == 0) {
+        realname = abi::__cxa_demangle(sym, NULL, NULL, &status);
+        if (status == 0) {
+          this->symbols.push_back(std::string(realname));
+          cache[pid].proc_names.push_back(std::string(realname));
+        } else {
+          this->symbols.push_back(std::string(sym));
+          cache[pid].proc_names.push_back(std::string(sym));
+        }
+        free(realname);
       } else {
-        this->symbols.push_back(std::string(sym));
+        unw_word_t ip;
+        unw_get_reg(&cursor, UNW_REG_IP, &ip);
+        unw_word_t sp;
+        unw_get_reg(&cursor, UNW_REG_SP, &sp);
+        logInfo(2,
+                "IP=0x%lx -- error: unable to obtain symbol name for this frame - %s "
+                "(frame SP=0x%lx)\n",
+                ip, unw_strerror(res), sp);
+        this->symbols.push_back(std::string("(missing)"));
+        cache[pid].proc_names.push_back(std::string("(missing)"));
+        this->error_occurred = true;
+        break;
       }
-      free(realname);
-    } else {
-      unw_word_t ip;
-      unw_get_reg(&cursor, UNW_REG_IP, &ip);
-      unw_word_t sp;
-      unw_get_reg(&cursor, UNW_REG_SP, &sp);
-      logInfo(2,
-              "IP=0x%lx -- error: unable to obtain symbol name for this frame - %s "
-              "(frame SP=0x%lx)\n",
-              ip, unw_strerror(res), sp);
-      this->symbols.push_back(std::string("(missing)"));
-      this->error_occurred = true;
-      break;
-    }
-
-    // Unwind only until we get to the function from which the current Python function is executed.
-    // On Python3 the main loop function is called "_PyEval_EvalFrameDefault", and on Python2 it's
-    // "PyEval_EvalFrameEx".
-    if (memcmp(sym, "_PyEval_EvalFrameDefault",
-                sizeof("_PyEval_EvalFrameDefault")) == 0 ||
-        memcmp(sym, "PyEval_EvalFrameEx", sizeof("PyEval_EvalFrameEx")) == 0)
-        {
-      break;
-    }
-  } while (unw_step(&cursor) > 0);
+      
+      // Unwind only until we get to the function from which the current Python function is executed.
+      // On Python3 the main loop function is called "_PyEval_EvalFrameDefault", and on Python2 it's
+      // "PyEval_EvalFrameEx".
+      if (memcmp(sym, "_PyEval_EvalFrameDefault",
+                  sizeof("_PyEval_EvalFrameDefault")) == 0 ||
+          memcmp(sym, "PyEval_EvalFrameEx", sizeof("PyEval_EvalFrameEx")) == 0)
+          {
+        break;
+      }
+    } while (unw_step(&cursor) > 0);
+    cache[pid].unwinded = true;
+  }
 
 }
 

@@ -18,6 +18,8 @@ typedef struct {
   unw_addr_space_t as;
   void *upt;
   time_t timestamp;
+  std::vector<std::string> proc_names;
+  bool unwinded = false;
 } UnwindCacheEntry;
 
 typedef std::map<uint32_t, UnwindCacheEntry> UnwindCache;
